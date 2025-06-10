@@ -1,46 +1,45 @@
-# ----------------------------------------------- #
-# Plugin Name           : TradingView-Webhook-Bot #
-# Author Name           : fabston                 #
-# File Name             : main.py                 #
-# ----------------------------------------------- #
-
-from handler import send_alert
-import config
-import time
+import os
+import requests
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-
-def get_timestamp():
-    timestamp = time.strftime("%Y-%m-%d %X")
-    return timestamp
-
-
-@app.route("/webhook", methods=["POST"])
+@app.route('/webhook', methods=['POST'])
 def webhook():
-    whitelisted_ips = ['52.89.214.238', '34.212.75.30', '54.218.53.128', '52.32.178.7']
-    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
-    if client_ip not in whitelisted_ips:
-        return jsonify({'message': 'Unauthorized'}), 401
-    try:
-        if request.method == "POST":
-            data = request.get_json()
-            if data["key"] == config.sec_key:
-                print(get_timestamp(), "Alert Received & Sent!")
-                send_alert(data)
-                return jsonify({'message': 'Webhook received successfully'}), 200
+    data = request.get_json()
+    signal = data.get('signal')
+    instrument = data.get('instrument')
 
-            else:
-                print("[X]", get_timestamp(), "Alert Received & Refused! (Wrong Key)")
-                return jsonify({'message': 'Unauthorized'}), 401
+    if signal and instrument:
+        response = execute_trade(signal, instrument)
+        return jsonify({"status": "success", "message": response}), 200
+    else:
+        return jsonify({"status": "error", "message": "Invalid data"}), 400
 
-    except Exception as e:
-        print("[X]", get_timestamp(), "Error:\n>", e)
-        return jsonify({'message': 'Error'}), 400
+def execute_trade(signal, instrument):
+    token = os.getenv("DERIV_TOKEN")
+    amount = os.getenv("TRADE_AMOUNT")
+    duration = os.getenv("TRADE_DURATION")
 
+    endpoint = "https://api.deriv.com/binary"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload = {
+        "buy": "1",
+        "price": amount,
+        "parameters": {
+            "amount": amount,
+            "basis": "stake",
+            "contract_type": "CALL" if signal == "BUY" else "PUT",
+            "currency": "USD",
+            "duration": duration,
+            "duration_unit": "m",
+            "symbol": instrument
+        }
+    }
+
+    response = requests.post(endpoint, json=payload, headers=headers)
+    return response.json()
 
 if __name__ == "__main__":
-    from waitress import serve
-
-    serve(app, host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=8080)
