@@ -38,15 +38,15 @@ def execute_trade(signal, instrument):
         }
     }
 
-try:
-    response = requests.post(endpoint, json=payload, headers=headers)
-    print(f"✔️ Sent {signal} trade to Deriv for {instrument}")
-    print("📦 Payload:", payload)
-    print("🧾 Deriv response:", response.text)
-    return response.json()
-except Exception as e:
-    print("❌ ERROR sending trade:", str(e))
-    return {"error": str(e)}
+    try:
+        response = requests.post(endpoint, json=payload, headers=headers)
+        print(f"✔️ Sent {signal} trade to Deriv for {instrument}")
+        print("📦 Payload:", payload)
+        print("🧾 Deriv response:", response.text)
+        return response.json()
+    except Exception as e:
+        print("❌ ERROR sending trade:", str(e))
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
