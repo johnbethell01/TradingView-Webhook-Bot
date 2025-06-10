@@ -14,7 +14,7 @@ def webhook():
         response = execute_trade(signal, instrument)
         return jsonify({"status": "success", "message": response}), 200
     else:
-        return jsonify({"status": "error", "message": "Invalid data"}), 400
+        return jsonify({"status": "error", "message": "Invalid data received"}), 400
 
 def execute_trade(signal, instrument):
     token = os.getenv("DERIV_TOKEN")
