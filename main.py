@@ -11,6 +11,8 @@ app = Flask(__name__)
 
 # Get variables from environment
 DERIV_TOKEN = os.getenv("FAST_AUTOTRADE")
+# Debug print to check if the token is correctly loaded
+print("🛠️ DEBUG: DERIV_TOKEN =", DERIV_TOKEN)  # This will show the token value in your console
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
