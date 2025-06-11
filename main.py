@@ -4,17 +4,27 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    data = request.get_json()
-    signal = data.get('signal')
-    instrument = data.get('instrument')
+@app.route("/", methods=["GET"])
+def index():
+    return "Webhook is live."
 
-    if signal and instrument:
-        response = execute_trade(signal, instrument)
-        return jsonify({"status": "success", "message": response}), 200
-    else:
-        return jsonify({"status": "error", "message": "Invalid data received"}), 400
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    try:
+        data = request.get_json(force=True)
+        signal = data.get('signal')
+        instrument = data.get('instrument')
+
+        print("📩 Webhook received:", data)
+
+        if signal and instrument:
+            response = execute_trade(signal, instrument)
+            return jsonify({"status": "success", "message": response}), 200
+        else:
+            return jsonify({"status": "error", "message": "Missing signal or instrument"}), 400
+    except Exception as e:
+        print("❌ Error:", str(e))
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 def execute_trade(signal, instrument):
     token = os.getenv("DERIV_TOKEN")
