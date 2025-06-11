@@ -34,10 +34,13 @@ def webhook():
             ws = create_connection("wss://ws.binaryws.com/websockets/v3?app_id=1089")
             
             # Authorize
-            ws.send(json.dumps({"authorize": DERIV_TOKEN}))
-            auth_res = json.loads(ws.recv())
-            if "error" in auth_res:
-                raise Exception(f"Authorization failed: {auth_res['error']['message']}")
+            auth_payload = {"authorize": DERIV_TOKEN}
+            print("📤 Sending Auth Payload to Deriv:", auth_payload)  # ✅ SEE WHAT'S GOING IN
+            ws.send(json.dumps(auth_payload))
+            auth_response = json.loads(ws.recv())
+            print("📥 Auth Response:", auth_response)  # Optional: log response for deeper inspection
+            if "error" in auth_response:
+                raise Exception(f"Authorization failed: {auth_response['error']['message']}")
 
             # Build proposal
             contract_type = "CALL" if signal.upper() == "BUY" else "PUT"
