@@ -22,7 +22,6 @@ def webhook():
 
         print(f"✔️ Triggering {signal} for {instrument}...")
 
-        # Define your Deriv trading request
         trade_payload = {
             "buy": 1,
             "price": 10,
@@ -49,7 +48,8 @@ def webhook():
             json=trade_payload
         )
 
-        print("🧾 Deriv response:", response.text)
+        print(f"📬 Deriv HTTP Status: {response.status_code}")
+        print(f"🧾 Deriv Full Response: {response.text}")
 
         return jsonify({
             "status": "success",
