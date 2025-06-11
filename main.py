@@ -2,11 +2,14 @@ from flask import Flask, request, jsonify
 import json
 import os
 import requests
+from datetime import datetime
 
 app = Flask(__name__)
 
+# ENV VARS
 DERIV_TOKEN = os.getenv("DERIV_TOKEN")
-DERIV_API_URL = "https://api.deriv.com/websockets/v3"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -19,14 +22,16 @@ def webhook():
 
         signal = data.get("signal")
         instrument = data.get("instrument")
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
 
         print(f"✔️ Triggering {signal} for {instrument}...")
 
+        # Prepare trade payload
         trade_payload = {
             "buy": 1,
             "price": 10,
             "parameters": {
-                "contract_type": signal.upper(),   # BUY or SELL
+                "contract_type": signal.upper(),
                 "symbol": instrument,
                 "duration": 1,
                 "duration_unit": "m",
@@ -37,19 +42,37 @@ def webhook():
             "req_id": 1
         }
 
-        headers = {
+        deriv_headers = {
             "Authorization": f"Bearer {DERIV_TOKEN}",
             "Content-Type": "application/json"
         }
 
         response = requests.post(
             url="https://api.deriv.com/binary",
-            headers=headers,
+            headers=deriv_headers,
             json=trade_payload
         )
 
         print(f"📬 Deriv HTTP Status: {response.status_code}")
         print(f"🧾 Deriv Full Response: {response.text}")
+
+        # Send Telegram message
+        telegram_msg = (
+            f"🚨 Trade Executed\n"
+            f"Signal: *{signal.upper()}*\n"
+            f"Pair: *{instrument}*\n"
+            f"Time: `{timestamp} UTC`"
+        )
+
+        tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        tg_payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": telegram_msg,
+            "parse_mode": "Markdown"
+        }
+
+        tg_response = requests.post(tg_url, json=tg_payload)
+        print("📲 Telegram alert sent:", tg_response.status_code, tg_response.text)
 
         return jsonify({
             "status": "success",
