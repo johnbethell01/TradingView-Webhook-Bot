@@ -1,65 +1,96 @@
-from flask import Flask, request, jsonify
 import os
+import json
+import asyncio
+import websockets
+from flask import Flask, request, jsonify
 import requests
 from datetime import datetime
 
 app = Flask(__name__)
 
-# Get secrets from Render environment variables
-DERIV_TOKEN = os.getenv("DERIV_TOKEN")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+DERIV_TOKEN = os.getenv("FAST_AUTOTRADE")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_USER_ID = os.getenv("TELEGRAM_USER_ID")
+TRADE_AMOUNT = os.getenv("TRADE_AMOUNT", "1")
 
-# ✅ Logging helper
-def log(message):
-    print(message, flush=True)
+async def send_trade_ws(signal_type, symbol, duration):
+    async with websockets.connect("wss://ws.derivws.com/websockets/v3") as ws:
+        await ws.send(json.dumps({
+            "authorize": DERIV_TOKEN
+        }))
+        await ws.recv()
+
+        proposal = {
+            "buy": 1,
+            "price": float(TRADE_AMOUNT),
+            "parameters": {
+                "amount": float(TRADE_AMOUNT),
+                "basis": "stake",
+                "contract_type": "CALL" if signal_type == "BUY" else "PUT",
+                "currency": "USD",
+                "duration": int(duration),
+                "duration_unit": "m",
+                "symbol": symbol
+            },
+            "passthrough": {
+                "duration": duration
+            },
+            "req_id": 1
+        }
+
+        await ws.send(json.dumps(proposal))
+        response = await ws.recv()
+        print(f"🧾 Deriv WebSocket Response ({duration}m):", response)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        log("📡 Webhook received")
-        data = request.get_json(force=True)
-        log(f"🔍 RAW BODY RECEIVED: {data}")
+        raw_data = request.data.decode("utf-8")
+        print("🔍 RAW BODY RECEIVED:", raw_data)
 
-        signal = data.get("signal")
-        instrument = data.get("instrument")
-        amount = data.get("amount", 1)  # optional
-        duration = data.get("duration", 1)  # optional
+        data = json.loads(raw_data)
+        signal = data.get("signal", "").upper()
+        instrument = data.get("instrument", "")
+
+        print("📩 Parsed JSON:", data)
 
         if signal not in ["BUY", "SELL"] or not instrument:
-            log("❌ Invalid or missing signal/instrument")
-            return jsonify({"status": "error", "message": "Invalid signal or instrument"}), 400
+            return jsonify({"error": "Invalid signal or instrument"}), 400
 
-        log(f"📩 Parsed JSON: {data}")
-        log(f"✔️ Triggering {signal} for {instrument}...")
+        print(f"✔️ Triggering {signal} for {instrument}...")
 
-        # Send to Deriv
-        deriv_url = "https://api.deriv.com/binary/v1/new_trade"
-        deriv_payload = {
-            "signal": signal,
-            "instrument": instrument,
-            "amount": amount,
-            "duration": duration,
-            "token": DERIV_TOKEN,
-        }
-        deriv_response = requests.post(deriv_url, json=deriv_payload)
-        log(f"📬 Deriv HTTP Status: {deriv_response.status_code}")
-        log(f"🧾 Deriv Full Response: {deriv_response.text}")
+        # Launch 1m, 3m, and 5m trades asynchronously
+        asyncio.run(send_trade_ws(signal, instrument, 1))
+        asyncio.run(send_trade_ws(signal, instrument, 3))
+        asyncio.run(send_trade_ws(signal, instrument, 5))
 
-        # Send to Telegram
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        telegram_message = f"🚨 *Trade Executed*\n*Signal:* {signal}\n*Pair:* {instrument}\n*Time:* `{now}`"
-        telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        telegram_payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": telegram_message,
-            "parse_mode": "Markdown"
-        }
-        telegram_response = requests.post(telegram_url, json=telegram_payload)
-        log(f"📲 Telegram alert sent: {telegram_response.status_code} {telegram_response.text}")
+        telegram_message = (
+            f"🚨 Trade Executed\n"
+            f"*Signal:* {signal}\n"
+            f"*Pair:* {instrument}\n"
+            f"*Time:* `{now}`"
+        )
 
+        send_telegram(telegram_message)
         return jsonify({"status": "success", "message": {"result": f"{signal} order for {instrument} sent"}})
 
     except Exception as e:
-        log(f"🔥 Exception: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print("❌ ERROR:", str(e))
+        return jsonify({"status": "error", "message": {"error": str(e)}}), 500
+
+def send_telegram(message):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_USER_ID,
+            "text": message,
+            "parse_mode": "Markdown"
+        }
+        response = requests.post(url, json=payload)
+        print("📲 Telegram alert sent:", response.status_code, response.text)
+    except Exception as e:
+        print("❌ Telegram Error:", e)
+
+if __name__ == "__main__":
+    app.run(debug=True)
