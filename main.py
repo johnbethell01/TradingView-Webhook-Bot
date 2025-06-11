@@ -1,6 +1,4 @@
-# main.py v2 (patched for websocket-client usage)
-# Make sure 'websocket-client' is added to your requirements.txt
-
+# main.py v2.1 (FIXED Deriv Auth with websocket-client)
 import os
 import json
 from flask import Flask, request, jsonify
@@ -9,83 +7,83 @@ from websocket import create_connection
 
 app = Flask(__name__)
 
-# Get variables from environment
+# ENV VARIABLES
 DERIV_TOKEN = os.getenv("FAST_AUTOTRADE")
-# Debug print to check if the token is correctly loaded
-print("🛠️ DEBUG: DERIV_TOKEN =", DERIV_TOKEN)  # This will show the token value in your console
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# Debug log for token load
+print("🛠️ DEBUG: DERIV_TOKEN =", DERIV_TOKEN)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         data = request.get_json(force=True)
-        print(f"🔍 RAW BODY RECEIVED: {data}")
+        print(f"\U0001F50D RAW BODY RECEIVED: {data}")
 
         signal = data.get("signal")
         instrument = data.get("instrument")
         amount = data.get("amount", 1)
         durations = data.get("durations", [60])
 
-        print(f"📬 Parsed JSON: {data}")
-        print(f"✔️ Triggering {signal} for {instrument}...")
+        print(f"\U0001F4EC Parsed JSON: {data}")
+        print(f"\u2714\ufe0f Triggering {signal} for {instrument}...")
 
         for duration in durations:
-            # Connect to Deriv WebSocket
+            # Connect to Deriv
             ws = create_connection("wss://ws.binaryws.com/websockets/v3?app_id=1089")
-
+            
             # Authorize
             ws.send(json.dumps({"authorize": DERIV_TOKEN}))
-            auth_response = json.loads(ws.recv())
+            auth_res = json.loads(ws.recv())
+            if "error" in auth_res:
+                raise Exception(f"Authorization failed: {auth_res['error']['message']}")
 
-            if "error" in auth_response:
-                raise Exception(f"Authorization failed: {auth_response['error']['message']}")
-
-            # Send contract request
+            # Build proposal
+            contract_type = "CALL" if signal.upper() == "BUY" else "PUT"
             proposal = {
-                "buy": 1,
-                "price": amount,
-                "parameters": {
-                    "amount": amount,
-                    "basis": "stake",
-                    "contract_type": "CALL" if signal.upper() == "BUY" else "PUT",
-                    "currency": "USD",
-                    "duration": duration,
-                    "duration_unit": "s",
-                    "symbol": instrument,
-                },
-                "subscribe": 1
+                "amount": float(amount),
+                "basis": "stake",
+                "contract_type": contract_type,
+                "currency": "USD",
+                "duration": int(duration),
+                "duration_unit": "s",
+                "symbol": instrument
             }
-            ws.send(json.dumps({"proposal": proposal["parameters"]}))
-            proposal_response = json.loads(ws.recv())
 
-            # Buy the contract
-            ws.send(json.dumps({"buy": proposal_response["proposal"].get("id"), "price": amount}))
-            buy_response = json.loads(ws.recv())
+            # Request proposal
+            ws.send(json.dumps({"proposal": proposal}))
+            proposal_res = json.loads(ws.recv())
+            if "error" in proposal_res:
+                raise Exception(f"Proposal failed: {proposal_res['error']['message']}")
+            proposal_id = proposal_res["proposal"]["id"]
 
-            print(f"📬 Deriv response: {buy_response}")
+            # Execute contract
+            ws.send(json.dumps({"buy": proposal_id, "price": float(amount)}))
+            buy_res = json.loads(ws.recv())
+            print(f"\U0001F4E6 Deriv response: {buy_res}")
             ws.close()
 
-        # Send Telegram Notification
-        msg = f"🚨 Trade Executed\n<b>Signal:</b> <b>{signal}</b>\n<b>Pair:</b> <b>{instrument}</b>\n<b>Time:</b> <code>{data.get('timestamp', 'N/A')}</code>"
+        # Send Telegram message
+        msg = f"\ud83d\udea8 Trade Executed\n<b>Signal:</b> <b>{signal}</b>\n<b>Pair:</b> <b>{instrument}</b>\n<b>Time:</b> <code>{data.get('timestamp', 'N/A')}</code>"
         telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         telegram_payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": msg,
             "parse_mode": "HTML"
         }
-        tg_res = requests.post(telegram_url, json=telegram_payload)
-        print(f"📲 Telegram alert sent: {tg_res.status_code} {tg_res.text}")
+        tg = requests.post(telegram_url, json=telegram_payload)
+        print(f"\U0001F4F2 Telegram alert sent: {tg.status_code} {tg.text}")
 
         return jsonify({"status": "success", "message": f"{signal} order for {instrument} sent"})
 
     except Exception as e:
-        print(f"❌ ERROR: {str(e)}")
+        print(f"\u274c ERROR: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/")
 def index():
-    return "FAST Webhook is running."
+    return "FAST Webhook v2.1 is running."
 
 if __name__ == "__main__":
     app.run(debug=True, port=10000, host="0.0.0.0")
