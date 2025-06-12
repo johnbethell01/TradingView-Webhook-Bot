@@ -1,5 +1,5 @@
-Flask==2.0.3
-requests==2.25.1
-gunicorn
-websocket-client
-werkzeug==2.0.3
+fastapi==0.110.0
+uvicorn==0.29.0
+gunicorn==21.2.0
+httpx==0.27.0
+websockets==12.0
