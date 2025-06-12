@@ -1,67 +1,52 @@
 import os
 import json
 import asyncio
-from fastapi import FastAPI, Request
 import websockets
+import httpx
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+from typing import List
+
+# Environment variables
+DERIV_TOKEN = os.getenv("FAST_AUTOTRADE")
+DERIV_APP_ID = os.getenv("DERIV_APP_ID", "24180")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+WEBSOCKET_URL = f"wss://ws.deriv.com/websockets/v3?app_id={DERIV_APP_ID}"
 
 app = FastAPI()
 
-# ENV VARS
-DERIV_TOKEN = os.getenv("FAST_AUTOTRADE")
-DERIV_APP_ID = os.getenv("DERIV_APP_ID")
-WEBSOCKET_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
+class SignalRequest(BaseModel):
+    signal: str
+    instrument: str
+    amount: float
+    durations: List[int]
+    score_tag: str = "FAST-SIGNAL"
 
-# 🟢 Root endpoint to prevent Render shutdown on GET /
-@app.get("/")
-async def root():
-    return {"status": "✅ Service alive at root /"}
-
-# 🟢 Ping endpoint for health checks
-@app.get("/ping")
-async def ping():
-    return {"status": "✅ v2.2.4 live", "websocket_url": WEBSOCKET_URL}
-
-# 🟢 Webhook to receive alerts
-@app.post("/webhook")
-async def webhook(request: Request):
+async def send_telegram_message(message: str):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Missing TELEGRAM_TOKEN or TELEGRAM_CHAT_ID")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
-        data = await request.json()
-        print("📩 Webhook received:", data)
-
-        signal = data.get("signal")
-        instrument = data.get("instrument")
-        amount = data.get("amount", 1)
-        durations = data.get("durations", [60])
-        score_tag = data.get("score_tag", "N/A")
-
-        if not all([signal, instrument, amount]):
-            return {"error": "Missing fields in webhook"}
-
-        for d in durations:
-            print(f"⏳ Starting trade task: {signal} {instrument} {d}s")
-            await execute_trade(signal, instrument, amount, d, score_tag)
-
-        return {"status": "✅ Webhook handled", "durations": durations}
-
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload)
+            if response.status_code != 200:
+                print(f"⚠️ Telegram failed: {response.text}")
     except Exception as e:
-        print(f"❌ Webhook error: {e}")
-        return {"error": str(e)}
+        print(f"⚠️ Telegram error: {str(e)}")
 
-# 🟢 Core trade execution logic
-async def execute_trade(signal, instrument, amount, duration, score_tag):
+async def execute_trade(signal: str, instrument: str, amount: float, duration: int):
+    print(f"🚀 Executing {signal.upper()} on {instrument} for {duration}s")
     try:
-        print(f"🚀 Executing {signal.upper()} on {instrument} for {duration}s")
-
         async with websockets.connect(WEBSOCKET_URL) as ws:
-            # Step 1: Authenticate
-            auth_payload = {"authorize": DERIV_TOKEN}
-            await ws.send(json.dumps(auth_payload))
+            await ws.send(json.dumps({"authorize": DERIV_TOKEN}))
             auth_response = await ws.recv()
-            print("🔐 Auth Response:", json.loads(auth_response))
+            print(f"🔐 Auth Response: {auth_response}")
 
-            # Step 2: Proposal payload
             contract_type = "CALL" if signal.upper() == "BUY" else "PUT"
-            proposal_payload = {
+            proposal = {
                 "proposal": 1,
                 "amount": amount,
                 "basis": "stake",
@@ -71,11 +56,48 @@ async def execute_trade(signal, instrument, amount, duration, score_tag):
                 "duration_unit": "s",
                 "symbol": instrument
             }
-
-            print("📤 Sending Proposal:", proposal_payload)
-            await ws.send(json.dumps(proposal_payload))
+            print(f"📤 Sending Proposal: {proposal}")
+            await ws.send(json.dumps(proposal))
             proposal_response = await ws.recv()
-            print("📥 Proposal Response:", json.loads(proposal_response))
+            print(f"📥 Proposal Response: {proposal_response}")
 
+            parsed = json.loads(proposal_response)
+            if "proposal" in parsed and "id" in parsed["proposal"]:
+                contract_id = parsed["proposal"]["id"]
+                buy_payload = {
+                    "buy": contract_id,
+                    "price": amount
+                }
+                print(f"🟢 Placing Order: {buy_payload}")
+                await ws.send(json.dumps(buy_payload))
+                buy_response = await ws.recv()
+                print(f"✅ Buy Response: {buy_response}")
+                await send_telegram_message(f"✅ Order placed: {buy_response}")
+            else:
+                error_msg = parsed.get("error", {}).get("message", "Unknown proposal error")
+                print(f"❌ Proposal error: {error_msg}")
+                await send_telegram_message(f"❌ Proposal error: {error_msg}")
     except Exception as e:
-        print(f"❌ Trade execution error @ {duration}s: {e}")
+        print(f"❌ Trade execution error @ {duration}s: {str(e)}")
+        await send_telegram_message(f"❌ Trade execution error @ {duration}s: {str(e)}")
+
+@app.post("/webhook")
+async def webhook_handler(request: Request):
+    data = await request.json()
+    print(f"📩 Webhook received: {data}")
+    try:
+        payload = SignalRequest(**data)
+        tasks = [execute_trade(payload.signal, payload.instrument, payload.amount, d) for d in payload.durations]
+        await asyncio.gather(*tasks)
+        return {"status": "✅ Webhook handled", "durations": payload.durations}
+    except Exception as e:
+        print(f"❌ Webhook processing error: {str(e)}")
+        return {"status": "❌ Error", "message": str(e)}
+
+@app.get("/")
+async def root():
+    return {"status": "✅ main.py v2.3 running", "websocket_url": WEBSOCKET_URL}
+
+@app.get("/ping")
+async def ping():
+    return {"status": "pong", "version": "v2.3"}
