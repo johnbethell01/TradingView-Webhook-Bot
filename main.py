@@ -9,7 +9,7 @@ app = FastAPI()
 # ENV VARS
 DERIV_TOKEN = os.getenv("FAST_AUTOTRADE")
 DERIV_APP_ID = os.getenv("DERIV_APP_ID")
-WEBSOCKET_URL = "wss://ws.binaryws.com/websockets/v3?app_id=" + DERIV_APP_ID
+WEBSOCKET_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
 
 # 🟢 Root endpoint to prevent Render shutdown on GET /
 @app.get("/")
