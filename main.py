@@ -8,7 +8,7 @@ import httpx
 app = FastAPI()
 
 DERIV_APP_ID = os.getenv("DERIV_APP_ID")
-FAST_AUTOTRADE = os.getenv("FAST_AUTOTRADE")  # ✅ Updated from DERIV_TOKEN
+FAST_AUTOTRADE = os.getenv("FAST_AUTOTRADE")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -17,7 +17,7 @@ WEBSOCKET_URL = "wss://ws.deriv.com/websockets/v3?app_id=" + DERIV_APP_ID
 
 @app.get("/ping")
 async def ping():
-    return {"status": "✅ main.py v2.2 running", "websocket_url": WEBSOCKET_URL}
+    return {"status": "✅ main.py v2.2.1 running", "websocket_url": WEBSOCKET_URL}
 
 
 @app.post("/webhook")
@@ -28,7 +28,7 @@ async def receive_signal(request: Request):
     signal = payload.get("signal")
     instrument = payload.get("instrument")
     amount = payload.get("amount", 1)
-    durations = payload.get("durations", [60])  # Default to 60s if not provided
+    durations = payload.get("durations", [60])
     score_tag = payload.get("score_tag", "UNRATED")
 
     if not signal or not instrument:
@@ -43,6 +43,7 @@ async def receive_signal(request: Request):
 async def execute_trade(signal, instrument, amount, duration, score_tag):
     contract_type = "CALL" if signal.upper() == "BUY" else "PUT"
 
+    # ✅ Flattened payload with proposal: 1 at root level
     proposal_payload = {
         "proposal": 1,
         "amount": amount,
@@ -56,9 +57,9 @@ async def execute_trade(signal, instrument, amount, duration, score_tag):
 
     try:
         async with websockets.connect(WEBSOCKET_URL) as ws:
-            # Authenticate
+            # Authenticate with FAST_AUTOTRADE token
             await ws.send(json.dumps({
-                "authorize": FAST_AUTOTRADE  # ✅ Updated auth key
+                "authorize": FAST_AUTOTRADE
             }))
             auth_response = await ws.recv()
             print(f"🔐 Auth response: {auth_response}")
@@ -68,7 +69,7 @@ async def execute_trade(signal, instrument, amount, duration, score_tag):
             proposal_response = await ws.recv()
             print(f"📥 Proposal Response: {proposal_response}")
 
-            # Notify via Telegram
+            # Send Telegram alert
             await send_telegram_alert(
                 f"📊 Signal: {signal} | {instrument} | {duration}s\n💵 Amount: ${amount}\n🏷️ Score: {score_tag}\n📬 Proposal Response: {proposal_response}"
             )
