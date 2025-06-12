@@ -1,95 +1,94 @@
 import os
 import json
-from flask import Flask, request, jsonify
-import requests
-from websocket import create_connection
+import asyncio
+import websockets
+from fastapi import FastAPI, Request
+import httpx
 
-app = Flask(__name__)
+app = FastAPI()
 
-# === ENVIRONMENT VARIABLES ===
-DERIV_TOKEN = os.getenv("FAST_AUTOTRADE")
+DERIV_APP_ID = os.getenv("DERIV_APP_ID")
+FAST_AUTOTRADE = os.getenv("FAST_AUTOTRADE")  # ✅ Updated from DERIV_TOKEN
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# === DEBUG ===
-print("🛠️ DEBUG: DERIV_TOKEN =", DERIV_TOKEN)
+WEBSOCKET_URL = "wss://ws.deriv.com/websockets/v3?app_id=" + DERIV_APP_ID
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
+
+@app.get("/ping")
+async def ping():
+    return {"status": "✅ main.py v2.2 running", "websocket_url": WEBSOCKET_URL}
+
+
+@app.post("/webhook")
+async def receive_signal(request: Request):
+    payload = await request.json()
+    print(f"📩 Webhook received: {payload}")
+
+    signal = payload.get("signal")
+    instrument = payload.get("instrument")
+    amount = payload.get("amount", 1)
+    durations = payload.get("durations", [60])  # Default to 60s if not provided
+    score_tag = payload.get("score_tag", "UNRATED")
+
+    if not signal or not instrument:
+        return {"error": "Missing required fields: signal, instrument"}
+
+    for duration in durations:
+        await execute_trade(signal, instrument, amount, duration, score_tag)
+
+    return {"status": "✅ Signal processed"}
+
+
+async def execute_trade(signal, instrument, amount, duration, score_tag):
+    contract_type = "CALL" if signal.upper() == "BUY" else "PUT"
+
+    proposal_payload = {
+        "proposal": 1,
+        "amount": amount,
+        "basis": "stake",
+        "contract_type": contract_type,
+        "currency": "USD",
+        "duration": duration,
+        "duration_unit": "s",
+        "symbol": instrument
+    }
+
     try:
-        data = request.get_json(force=True)
-        print(f"🔍 RAW BODY RECEIVED: {data}")
+        async with websockets.connect(WEBSOCKET_URL) as ws:
+            # Authenticate
+            await ws.send(json.dumps({
+                "authorize": FAST_AUTOTRADE  # ✅ Updated auth key
+            }))
+            auth_response = await ws.recv()
+            print(f"🔐 Auth response: {auth_response}")
 
-        signal = data.get("signal")
-        instrument = data.get("instrument")
-        amount = data.get("amount", 1)
-        durations = data.get("durations", [60])
+            # Send trade proposal
+            await ws.send(json.dumps(proposal_payload))
+            proposal_response = await ws.recv()
+            print(f"📥 Proposal Response: {proposal_response}")
 
-        print(f"📬 Parsed JSON: {data}")
-        print(f"✔️ Triggering {signal} for {instrument}...")
-
-        for duration in durations:
-            # === CONNECT TO DERIV ===
-            ws = create_connection("wss://ws.binaryws.com/websockets/v3?app_id=1089")
-
-            # === AUTHORIZE ===
-            auth_payload = {"authorize": DERIV_TOKEN}
-            print("📤 Sending Auth Payload to Deriv:", auth_payload)
-
-            ws.send(json.dumps(auth_payload))
-            auth_response = json.loads(ws.recv())
-            print("📥 Auth Response:", auth_response)
-
-            if "error" in auth_response:
-                raise Exception(f"Authorization failed: {auth_response['error']['message']}")
-
-            # === BUILD PROPOSAL ===
-            contract_type = "CALL" if signal.upper() == "BUY" else "PUT"
-            proposal = {
-                "amount": float(amount),
-                "basis": "stake",
-                "contract_type": contract_type,
-                "currency": "USD",
-                "duration": int(duration),
-                "duration_unit": "s",
-                "symbol": instrument
-            }
-
-            ws.send(json.dumps({"proposal": proposal}))
-            proposal_response = json.loads(ws.recv())
-            print("📥 Proposal Response:", proposal_response)
-
-            if "error" in proposal_response:
-                raise Exception(f"Proposal failed: {proposal_response['error']['message']}")
-
-            # === BUY CONTRACT ===
-            proposal_id = proposal_response["proposal"]["id"]
-            ws.send(json.dumps({"buy": proposal_id, "price": float(amount)}))
-            buy_response = json.loads(ws.recv())
-            print("✅ Buy Response:", buy_response)
-
-            ws.close()
-
-        # === TELEGRAM NOTIFY ===
-        msg = f"🚨 Trade Executed\n<b>Signal:</b> <b>{signal}</b>\n<b>Pair:</b> <b>{instrument}</b>\n<b>Time:</b> <code>{data.get('timestamp', 'N/A')}</code>"
-        telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        telegram_payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": msg,
-            "parse_mode": "HTML"
-        }
-        tg_res = requests.post(telegram_url, json=telegram_payload)
-        print(f"📲 Telegram alert sent: {tg_res.status_code} {tg_res.text}")
-
-        return jsonify({"status": "success", "message": f"{signal} order for {instrument} sent"})
+            # Notify via Telegram
+            await send_telegram_alert(
+                f"📊 Signal: {signal} | {instrument} | {duration}s\n💵 Amount: ${amount}\n🏷️ Score: {score_tag}\n📬 Proposal Response: {proposal_response}"
+            )
 
     except Exception as e:
-        print(f"❌ ERROR: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print(f"❌ ERROR: {e}")
+        await send_telegram_alert(f"❌ ERROR during trade execution:\n{e}")
 
-@app.route("/")
-def index():
-    return "FAST Webhook is running."
 
-if __name__ == "__main__":
-    app.run(debug=True, port=10000, host="0.0.0.0")
+async def send_telegram_alert(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Missing TELEGRAM_TOKEN or TELEGRAM_CHAT_ID")
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=data)
+            print(f"📤 Telegram status: {response.status_code} | {response.text}")
+    except Exception as e:
+        print(f"❌ Telegram send error: {e}")
